@@ -1,0 +1,9 @@
+torch>=2.1
+torchvision>=0.16
+torchinfo
+pyyaml
+scikit-learn
+pillow
+numpy
+pytest
+matplotlib

@@ -1,0 +1,60 @@
+# Training defaults = design doc 00 sec. 7 (from scratch, small/medium data) + doc 02 sec. 6 deltas.
+# Every key can be overridden on the command line, e.g. --set train.epochs=5 model.mode=plain
+
+dataset: paddy               # paddy | rice-leaf-bd | plantvillage | plantwild  (configs/datasets.yaml)
+data_root: null              # null -> $LOOPMAXVIT_DATA_ROOT -> datasets.yaml data_root
+split: train-val-test        # train-val-test: 80/10/10, val picks best.pt + early stopping, test reported once
+                             # train-val:      80/20, no test set (final numbers are on val -> optimistic)
+val_frac: null               # fraction of the whole pool; null -> 0.1 (train-val-test) / 0.2 (train-val)
+test_frac: 0.1               # train-val-test only
+official_split: false        # plantwild only: official train / val / test (train-val: official train+val / test)
+seed: 42
+out_dir: runs
+
+model:
+  variant: maxvit-t          # maxvit-nano (dev) | maxvit-t | maxvit-s | maxvit-b (paper headline, -56 %)
+  mode: pmal                 # base | shallow | plain (Loop-plain, fixed partitions) | pmal (Loop-full, M1)
+  carry: false               # M3 per-axis loop-carried attention logits in S3
+  pmal_axes: both            # PM2 ablation: both | window | grid
+  window_mask: false         # PM3 ablation: Swin-masked windows instead of cyclic ones
+  rel_tables: auto           # PM4 ablation: auto (per-iteration on permuted axes) | shared | per_iter
+  s3_cycle: 1                # k x T granularity (R3c)
+  img: 224                   # multiple of 32
+  P: auto                    # window = grid size; auto = img/32 (224 -> 7, 192 -> 6, 160 -> 5, 128 -> 4)
+  loop_stages: [stage1, stage2, stage3, stage4]
+  drop_path: 0.1             # 0.1 maxvit-t / 0.3 maxvit-b; per-iteration linear in t inside loops (R8)
+  T: {}                      # training T per stage, e.g. {stage3: 4}; empty = doc defaults (L-1 per stage)
+
+train:
+  epochs: 100
+  batch_size: 32             # maxvit-t at 224 px: peak 8.1 GB at max random T (batch 64 needs ~16 GB)
+  base_lr: 1.0e-3            # lr = base_lr * batch_size / 512
+  min_lr: 1.0e-6
+  warmup_epochs: 10
+  weight_decay: 0.05         # 0 on norms, biases, e_t, beta_t, gamma_t, alpha, theta, rel tables
+  grad_clip: 1.0             # important for looped stages
+  label_smoothing: 0.1
+  amp: bf16                  # bf16 | fp16 | none
+  random_T: true             # R6: T ~ U[ceil(.5T), ceil(1.5T)] per batch; S1 ~ U[1,2], S4 ~ U[1,3]
+  num_workers: 8
+  recal_batches: 50          # R13: BN recalibration batches before the final evaluation
+  recal_batches_epoch: 15    # ... and before each per-epoch validation
+  eval_T_max_factor: 2       # final acc-vs-T curve for T = 1 .. factor * T_train (stage3)
+  early_stopping:
+    metric: val_acc          # val_acc | val_macro_f1 | val_loss; also decides which epoch is best.pt
+    patience: 20             # stop after this many epochs without improvement (counted after warmup); 0 = off
+    min_delta: 0.0           # smallest change that counts as an improvement
+  save_every: 1              # also write checkpoints/epoch_XXX.pt every N epochs (resumable); 0 = off
+  keep_checkpoints: 3        # keep only the newest N epoch checkpoints; 0 = keep all (~270 MB each for maxvit-t)
+  benchmark: true            # final.json: inference throughput (img/s) and batch-1 latency
+  limit: null                # subsample N training images for quick sanity runs
+
+aug:
+  crop_scale: [0.25, 1.0]
+  vflip: true                # leaf images have no canonical orientation
+  randaugment: [2, 9]
+  random_erasing: 0.25
+  mixup: 0.2                 # Mixup alpha
+  cutmix: 0.5                # CutMix alpha
+  mix_prob: 0.5              # fraction of batches that get Mixup or CutMix (off -> set 0)
+  eval_crop_pct: 0.875
